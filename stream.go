@@ -298,9 +298,10 @@ type Cell struct {
 // RowOpts define the options for the set row, it can be used directly in
 // StreamWriter.SetRow to specify the style and properties of the row.
 type RowOpts struct {
-	Height  float64
-	Hidden  bool
-	StyleID int
+	Height       float64
+	Hidden       bool
+	StyleID      int
+	OutlineLevel int
 }
 
 // SetRow writes an array to stream rows by giving a worksheet name, starting
@@ -366,6 +367,9 @@ func marshalRowAttrs(opts ...RowOpts) (attrs string, err error) {
 	}
 	if opt.StyleID > 0 {
 		attrs += fmt.Sprintf(` s="%d" customFormat="true"`, opt.StyleID)
+	}
+	if opt.OutlineLevel > 0 && opt.OutlineLevel < 8 {
+		attrs += fmt.Sprintf(` outlineLevel="%d"`, opt.OutlineLevel)
 	}
 	if opt.Height > 0 {
 		attrs += fmt.Sprintf(` ht="%v" customHeight="true"`, opt.Height)
