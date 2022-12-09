@@ -18,7 +18,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"math/big"
+	"io/ioutil"
 	"os"
 	"regexp"
 	"strconv"
@@ -43,7 +43,7 @@ func (f *File) ReadZipReader(r *zip.Reader) (map[string][]byte, int, error) {
 		if unzipSize > f.options.UnzipSizeLimit {
 			return fileList, worksheets, newUnzipSizeLimitError(f.options.UnzipSizeLimit)
 		}
-		fileName := strings.ReplaceAll(v.Name, "\\", "/")
+		fileName := strings.Replace(v.Name, "\\", "/", -1)
 		if partName, ok := docPart[strings.ToLower(fileName)]; ok {
 			fileName = partName
 		}
@@ -72,7 +72,7 @@ func (f *File) ReadZipReader(r *zip.Reader) (map[string][]byte, int, error) {
 // unzipToTemp unzip the zip entity to the system temporary directory and
 // returned the unzipped file path.
 func (f *File) unzipToTemp(zipFile *zip.File) (string, error) {
-	tmp, err := os.CreateTemp(os.TempDir(), "excelize-")
+	tmp, err := ioutil.TempFile(os.TempDir(), "excelize-")
 	if err != nil {
 		return "", err
 	}
@@ -110,7 +110,7 @@ func (f *File) readBytes(name string) []byte {
 	if err != nil {
 		return content
 	}
-	content, _ = io.ReadAll(file)
+	content, _ = ioutil.ReadAll(file)
 	f.Pkg.Store(name, content)
 	_ = file.Close()
 	return content
@@ -148,7 +148,8 @@ func readFile(file *zip.File) ([]byte, error) {
 //
 // Example:
 //
-//	excelize.SplitCellName("AK74") // return "AK", 74, nil
+//     excelize.SplitCellName("AK74") // return "AK", 74, nil
+//
 func SplitCellName(cell string) (string, int, error) {
 	alpha := func(r rune) bool {
 		return ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') || (r == 36)
@@ -186,12 +187,13 @@ func JoinCellName(col string, row int) (string, error) {
 }
 
 // ColumnNameToNumber provides a function to convert Excel sheet column name
-// (case-insensitive) to int. The function returns an error if column name
-// incorrect.
+// to int. Column name case-insensitive. The function returns an error if
+// column name incorrect.
 //
 // Example:
 //
-//	excelize.ColumnNameToNumber("AK") // returns 37, nil
+//     excelize.ColumnNameToNumber("AK") // returns 37, nil
+//
 func ColumnNameToNumber(name string) (int, error) {
 	if len(name) == 0 {
 		return -1, newInvalidColumnNameError(name)
@@ -209,7 +211,7 @@ func ColumnNameToNumber(name string) (int, error) {
 		}
 		multi *= 26
 	}
-	if col > MaxColumns {
+	if col > TotalColumns {
 		return -1, ErrColumnNumber
 	}
 	return col, nil
@@ -220,9 +222,13 @@ func ColumnNameToNumber(name string) (int, error) {
 //
 // Example:
 //
-//	excelize.ColumnNumberToName(37) // returns "AK", nil
+//     excelize.ColumnNumberToName(37) // returns "AK", nil
+//
 func ColumnNumberToName(num int) (string, error) {
-	if num < MinColumns || num > MaxColumns {
+	if num < 1 {
+		return "", fmt.Errorf("incorrect column number %d", num)
+	}
+	if num > TotalColumns {
 		return "", ErrColumnNumber
 	}
 	var col string
@@ -238,8 +244,9 @@ func ColumnNumberToName(num int) (string, error) {
 //
 // Example:
 //
-//	excelize.CellNameToCoordinates("A1") // returns 1, 1, nil
-//	excelize.CellNameToCoordinates("Z3") // returns 26, 3, nil
+//    excelize.CellNameToCoordinates("A1") // returns 1, 1, nil
+//    excelize.CellNameToCoordinates("Z3") // returns 26, 3, nil
+//
 func CellNameToCoordinates(cell string) (int, int, error) {
 	colName, row, err := SplitCellName(cell)
 	if err != nil {
@@ -257,11 +264,12 @@ func CellNameToCoordinates(cell string) (int, int, error) {
 //
 // Example:
 //
-//	excelize.CoordinatesToCellName(1, 1) // returns "A1", nil
-//	excelize.CoordinatesToCellName(1, 1, true) // returns "$A$1", nil
+//    excelize.CoordinatesToCellName(1, 1) // returns "A1", nil
+//    excelize.CoordinatesToCellName(1, 1, true) // returns "$A$1", nil
+//
 func CoordinatesToCellName(col, row int, abs ...bool) (string, error) {
 	if col < 1 || row < 1 {
-		return "", fmt.Errorf("invalid cell reference [%d, %d]", col, row)
+		return "", fmt.Errorf("invalid cell coordinates [%d, %d]", col, row)
 	}
 	sign := ""
 	for _, a := range abs {
@@ -273,19 +281,19 @@ func CoordinatesToCellName(col, row int, abs ...bool) (string, error) {
 	return sign + colName + sign + strconv.Itoa(row), err
 }
 
-// rangeRefToCoordinates provides a function to convert range reference to a
+// areaRefToCoordinates provides a function to convert area reference to a
 // pair of coordinates.
-func rangeRefToCoordinates(ref string) ([]int, error) {
-	rng := strings.Split(strings.ReplaceAll(ref, "$", ""), ":")
+func areaRefToCoordinates(ref string) ([]int, error) {
+	rng := strings.Split(strings.Replace(ref, "$", "", -1), ":")
 	if len(rng) < 2 {
 		return nil, ErrParameterInvalid
 	}
-	return cellRefsToCoordinates(rng[0], rng[1])
+	return areaRangeToCoordinates(rng[0], rng[1])
 }
 
-// cellRefsToCoordinates provides a function to convert cell range to a
+// areaRangeToCoordinates provides a function to convert cell range to a
 // pair of coordinates.
-func cellRefsToCoordinates(firstCell, lastCell string) ([]int, error) {
+func areaRangeToCoordinates(firstCell, lastCell string) ([]int, error) {
 	coordinates := make([]int, 4)
 	var err error
 	coordinates[0], coordinates[1], err = CellNameToCoordinates(firstCell)
@@ -296,7 +304,7 @@ func cellRefsToCoordinates(firstCell, lastCell string) ([]int, error) {
 	return coordinates, err
 }
 
-// sortCoordinates provides a function to correct the cell range, such
+// sortCoordinates provides a function to correct the coordinate area, such
 // correct C1:B3 to B1:C3.
 func sortCoordinates(coordinates []int) error {
 	if len(coordinates) != 4 {
@@ -311,9 +319,9 @@ func sortCoordinates(coordinates []int) error {
 	return nil
 }
 
-// coordinatesToRangeRef provides a function to convert a pair of coordinates
-// to range reference.
-func (f *File) coordinatesToRangeRef(coordinates []int) (string, error) {
+// coordinatesToAreaRef provides a function to convert a pair of coordinates
+// to area reference.
+func (f *File) coordinatesToAreaRef(coordinates []int) (string, error) {
 	if len(coordinates) != 4 {
 		return "", ErrCoordinates
 	}
@@ -349,7 +357,7 @@ func (f *File) getDefinedNameRefTo(definedNameName string, currentSheet string) 
 	return
 }
 
-// flatSqref convert reference sequence to cell reference list.
+// flatSqref convert reference sequence to cell coordinates list.
 func (f *File) flatSqref(sqref string) (cells map[int][][]int, err error) {
 	var coordinates []int
 	cells = make(map[int][][]int)
@@ -364,7 +372,7 @@ func (f *File) flatSqref(sqref string) (cells map[int][][]int, err error) {
 			}
 			cells[col] = append(cells[col], []int{col, row})
 		case 2:
-			if coordinates, err = rangeRefToCoordinates(ref); err != nil {
+			if coordinates, err = areaRefToCoordinates(ref); err != nil {
 				return
 			}
 			_ = sortCoordinates(coordinates)
@@ -421,14 +429,19 @@ func boolPtr(b bool) *bool { return &b }
 // intPtr returns a pointer to an int with the given value.
 func intPtr(i int) *int { return &i }
 
-// uintPtr returns a pointer to an int with the given value.
-func uintPtr(i uint) *uint { return &i }
-
 // float64Ptr returns a pointer to a float64 with the given value.
 func float64Ptr(f float64) *float64 { return &f }
 
 // stringPtr returns a pointer to a string with the given value.
 func stringPtr(s string) *string { return &s }
+
+// defaultTrue returns true if b is nil, or the pointed value.
+func defaultTrue(b *bool) bool {
+	if b == nil {
+		return true
+	}
+	return *b
+}
 
 // MarshalXML convert the boolean data type to literal values 0 or 1 on
 // serialization.
@@ -493,11 +506,11 @@ func (avb *attrValBool) UnmarshalXML(d *xml.Decoder, start xml.StartElement) err
 	return nil
 }
 
-// fallbackOptions provides a method to convert format string to []byte and
+// parseFormatSet provides a method to convert format string to []byte and
 // handle empty string.
-func fallbackOptions(opts string) []byte {
-	if opts != "" {
-		return []byte(opts)
+func parseFormatSet(formatSet string) []byte {
+	if formatSet != "" {
+		return []byte(formatSet)
 	}
 	return []byte("{}")
 }
@@ -519,14 +532,14 @@ func namespaceStrictToTransitional(content []byte) []byte {
 	return content
 }
 
-// bytesReplace replace source bytes with given target.
-func bytesReplace(s, source, target []byte, n int) []byte {
+// bytesReplace replace old bytes with given new.
+func bytesReplace(s, old, new []byte, n int) []byte {
 	if n == 0 {
 		return s
 	}
 
-	if len(source) < len(target) {
-		return bytes.Replace(s, source, target, n)
+	if len(old) < len(new) {
+		return bytes.Replace(s, old, new, n)
 	}
 
 	if n < 0 {
@@ -535,14 +548,14 @@ func bytesReplace(s, source, target []byte, n int) []byte {
 
 	var wid, i, j, w int
 	for i, j = 0, 0; i < len(s) && j < n; j++ {
-		wid = bytes.Index(s[i:], source)
+		wid = bytes.Index(s[i:], old)
 		if wid < 0 {
 			break
 		}
 
 		w += copy(s[w:], s[i:i+wid])
-		w += copy(s[w:], target)
-		i += wid + len(source)
+		w += copy(s[w:], new)
+		i += wid + len(old)
 	}
 
 	w += copy(s[w:], s[i:])
@@ -626,12 +639,12 @@ func getXMLNamespace(space string, attr []xml.Attr) string {
 // replaceNameSpaceBytes provides a function to replace the XML root element
 // attribute by the given component part path and XML content.
 func (f *File) replaceNameSpaceBytes(path string, contentMarshal []byte) []byte {
-	sourceXmlns := []byte(`xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
-	targetXmlns := []byte(templateNamespaceIDMap)
+	oldXmlns := []byte(`xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
+	newXmlns := []byte(templateNamespaceIDMap)
 	if attr, ok := f.xmlAttr[path]; ok {
-		targetXmlns = []byte(genXMLNamespace(attr))
+		newXmlns = []byte(genXMLNamespace(attr))
 	}
-	return bytesReplace(contentMarshal, sourceXmlns, bytes.ReplaceAll(targetXmlns, []byte(" mc:Ignorable=\"r\""), []byte{}), -1)
+	return bytesReplace(contentMarshal, oldXmlns, newXmlns, -1)
 }
 
 // addNameSpaces provides a function to add an XML attribute by the given
@@ -680,25 +693,40 @@ func (f *File) setIgnorableNameSpace(path string, index int, ns xml.Attr) {
 
 // addSheetNameSpace add XML attribute for worksheet.
 func (f *File) addSheetNameSpace(sheet string, ns xml.Attr) {
-	name, _ := f.getSheetXMLPath(sheet)
+	name := f.sheetMap[trimSheetName(sheet)]
 	f.addNameSpaces(name, ns)
 }
 
 // isNumeric determines whether an expression is a valid numeric type and get
 // the precision for the numeric.
-func isNumeric(s string) (bool, int, float64) {
-	if strings.Contains(s, "_") {
-		return false, 0, 0
+func isNumeric(s string) (bool, int) {
+	dot, e, n, p := false, false, false, 0
+	for i, v := range s {
+		if v == '.' {
+			if dot {
+				return false, 0
+			}
+			dot = true
+		} else if v == 'E' || v == 'e' {
+			e = true
+		} else if v < '0' || v > '9' {
+			if i == 0 && v == '-' {
+				continue
+			}
+			if e && v == '-' {
+				return true, 0
+			}
+			if e && v == '+' {
+				p = 15
+				continue
+			}
+			return false, 0
+		} else {
+			p++
+		}
+		n = true
 	}
-	var decimal big.Float
-	_, ok := decimal.SetString(s)
-	if !ok {
-		return false, 0, 0
-	}
-	var noScientificNotation string
-	flt, _ := decimal.Float64()
-	noScientificNotation = strconv.FormatFloat(flt, 'f', -1, 64)
-	return true, len(strings.ReplaceAll(noScientificNotation, ".", "")), flt
+	return n, p
 }
 
 var (

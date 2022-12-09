@@ -16,6 +16,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"reflect"
 	"strconv"
@@ -25,89 +26,77 @@ import (
 
 // StreamWriter defined the type of stream writer.
 type StreamWriter struct {
-	file            *File
+	File            *File
 	Sheet           string
 	SheetID         int
 	sheetWritten    bool
-	cols            strings.Builder
+	cols            string
 	worksheet       *xlsxWorksheet
 	rawData         bufferedWriter
-	rows            int
 	mergeCellsCount int
-	mergeCells      strings.Builder
+	mergeCells      string
 	tableParts      string
 }
 
 // NewStreamWriter return stream writer struct by given worksheet name for
 // generate new worksheet with large amounts of data. Note that after set
-// rows, you must call the 'Flush' method to end the streaming writing process
-// and ensure that the order of row numbers is ascending, the normal mode
-// functions and stream mode functions can't be work mixed to writing data on
-// the worksheets, you can't get cell value when in-memory chunks data over
-// 16MB. For example, set data for worksheet of size 102400 rows x 50 columns
-// with numbers and style:
+// rows, you must call the 'Flush' method to end the streaming writing
+// process and ensure that the order of line numbers is ascending, the common
+// API and stream API can't be work mixed to writing data on the worksheets,
+// you can't get cell value when in-memory chunks data over 16MB. For
+// example, set data for worksheet of size 102400 rows x 50 columns with
+// numbers and style:
 //
-//	file := excelize.NewFile()
-//	defer func() {
-//	    if err := file.Close(); err != nil {
-//	        fmt.Println(err)
-//	    }
-//	}()
-//	streamWriter, err := file.NewStreamWriter("Sheet1")
-//	if err != nil {
-//	    fmt.Println(err)
-//	}
-//	styleID, err := file.NewStyle(&excelize.Style{Font: &excelize.Font{Color: "#777777"}})
-//	if err != nil {
-//	    fmt.Println(err)
-//	}
-//	if err := streamWriter.SetRow("A1",
-//	    []interface{}{
-//	        excelize.Cell{StyleID: styleID, Value: "Data"},
-//	        []excelize.RichTextRun{
-//	            {Text: "Rich ", Font: &excelize.Font{Color: "2354e8"}},
-//	            {Text: "Text", Font: &excelize.Font{Color: "e83723"}},
-//	        },
-//	    },
-//	    excelize.RowOpts{Height: 45, Hidden: false}); err != nil {
-//	    fmt.Println(err)
-//	}
-//	for rowID := 2; rowID <= 102400; rowID++ {
-//	    row := make([]interface{}, 50)
-//	    for colID := 0; colID < 50; colID++ {
-//	        row[colID] = rand.Intn(640000)
-//	    }
-//	    cell, _ := excelize.CoordinatesToCellName(1, rowID)
-//	    if err := streamWriter.SetRow(cell, row); err != nil {
-//	        fmt.Println(err)
-//	    }
-//	}
-//	if err := streamWriter.Flush(); err != nil {
-//	    fmt.Println(err)
-//	}
-//	if err := file.SaveAs("Book1.xlsx"); err != nil {
-//	    fmt.Println(err)
-//	}
+//    file := excelize.NewFile()
+//    streamWriter, err := file.NewStreamWriter("Sheet1")
+//    if err != nil {
+//        fmt.Println(err)
+//    }
+//    styleID, err := file.NewStyle(&excelize.Style{Font: &excelize.Font{Color: "#777777"}})
+//    if err != nil {
+//        fmt.Println(err)
+//    }
+//    if err := streamWriter.SetRow("A1", []interface{}{excelize.Cell{StyleID: styleID, Value: "Data"}},
+//        excelize.RowOpts{Height: 45, Hidden: false}); err != nil {
+//        fmt.Println(err)
+//    }
+//    for rowID := 2; rowID <= 102400; rowID++ {
+//        row := make([]interface{}, 50)
+//        for colID := 0; colID < 50; colID++ {
+//            row[colID] = rand.Intn(640000)
+//        }
+//        cell, _ := excelize.CoordinatesToCellName(1, rowID)
+//        if err := streamWriter.SetRow(cell, row); err != nil {
+//            fmt.Println(err)
+//        }
+//    }
+//    if err := streamWriter.Flush(); err != nil {
+//        fmt.Println(err)
+//    }
+//    if err := file.SaveAs("Book1.xlsx"); err != nil {
+//        fmt.Println(err)
+//    }
 //
 // Set cell value and cell formula for a worksheet with stream writer:
 //
-//	err := streamWriter.SetRow("A1", []interface{}{
-//	    excelize.Cell{Value: 1},
-//	    excelize.Cell{Value: 2},
-//	    excelize.Cell{Formula: "SUM(A1,B1)"}});
+//    err := streamWriter.SetRow("A1", []interface{}{
+//        excelize.Cell{Value: 1},
+//        excelize.Cell{Value: 2},
+//        excelize.Cell{Formula: "SUM(A1,B1)"}});
 //
 // Set cell value and rows style for a worksheet with stream writer:
 //
-//	err := streamWriter.SetRow("A1", []interface{}{
-//	    excelize.Cell{Value: 1}},
-//	    excelize.RowOpts{StyleID: styleID, Height: 20, Hidden: false});
+//    err := streamWriter.SetRow("A1", []interface{}{
+//        excelize.Cell{Value: 1}},
+//        excelize.RowOpts{StyleID: styleID, Height: 20, Hidden: false});
+//
 func (f *File) NewStreamWriter(sheet string) (*StreamWriter, error) {
 	sheetID := f.getSheetID(sheet)
 	if sheetID == -1 {
-		return nil, newNoExistSheetError(sheet)
+		return nil, fmt.Errorf("sheet %s is not exist", sheet)
 	}
 	sw := &StreamWriter{
-		file:    f,
+		File:    f,
 		Sheet:   sheet,
 		SheetID: sheetID,
 	}
@@ -117,32 +106,32 @@ func (f *File) NewStreamWriter(sheet string) (*StreamWriter, error) {
 		return nil, err
 	}
 
-	sheetXMLPath, _ := f.getSheetXMLPath(sheet)
+	sheetPath := f.sheetMap[trimSheetName(sheet)]
 	if f.streams == nil {
 		f.streams = make(map[string]*StreamWriter)
 	}
-	f.streams[sheetXMLPath] = sw
+	f.streams[sheetPath] = sw
 
 	_, _ = sw.rawData.WriteString(xml.Header + `<worksheet` + templateNamespaceIDMap)
-	bulkAppendFields(&sw.rawData, sw.worksheet, 2, 3)
+	bulkAppendFields(&sw.rawData, sw.worksheet, 2, 5)
 	return sw, err
 }
 
 // AddTable creates an Excel table for the StreamWriter using the given
-// cell range and format set. For example, create a table of A1:D5:
+// coordinate area and format set. For example, create a table of A1:D5:
 //
-//	err := sw.AddTable("A1", "D5", "")
+//    err := sw.AddTable("A1", "D5", "")
 //
 // Create a table of F2:H6 with format set:
 //
-//	err := sw.AddTable("F2", "H6", `{
-//	    "table_name": "table",
-//	    "table_style": "TableStyleMedium2",
-//	    "show_first_column": true,
-//	    "show_last_column": true,
-//	    "show_row_stripes": false,
-//	    "show_column_stripes": true
-//	}`)
+//    err := sw.AddTable("F2", "H6", `{
+//        "table_name": "table",
+//        "table_style": "TableStyleMedium2",
+//        "show_first_column": true,
+//        "show_last_column": true,
+//        "show_row_stripes": false,
+//        "show_column_stripes": true
+//    }`)
 //
 // Note that the table must be at least two lines including the header. The
 // header cells must contain strings and must be unique.
@@ -151,13 +140,13 @@ func (f *File) NewStreamWriter(sheet string) (*StreamWriter, error) {
 // called after the rows are written but before Flush.
 //
 // See File.AddTable for details on the table format.
-func (sw *StreamWriter) AddTable(hCell, vCell, opts string) error {
-	options, err := parseTableOptions(opts)
+func (sw *StreamWriter) AddTable(hCell, vCell, format string) error {
+	formatSet, err := parseFormatTableSet(format)
 	if err != nil {
 		return err
 	}
 
-	coordinates, err := cellRefsToCoordinates(hCell, vCell)
+	coordinates, err := areaRangeToCoordinates(hCell, vCell)
 	if err != nil {
 		return err
 	}
@@ -168,8 +157,8 @@ func (sw *StreamWriter) AddTable(hCell, vCell, opts string) error {
 		coordinates[3]++
 	}
 
-	// Correct table reference range, such correct C1:B3 to B1:C3.
-	ref, err := sw.file.coordinatesToRangeRef(coordinates)
+	// Correct table reference coordinate area, such correct C1:B3 to B1:C3.
+	ref, err := sw.File.coordinatesToAreaRef(coordinates)
 	if err != nil {
 		return err
 	}
@@ -187,9 +176,9 @@ func (sw *StreamWriter) AddTable(hCell, vCell, opts string) error {
 		}
 	}
 
-	tableID := sw.file.countTables() + 1
+	tableID := sw.File.countTables() + 1
 
-	name := options.TableName
+	name := formatSet.TableName
 	if name == "" {
 		name = "Table" + strconv.Itoa(tableID)
 	}
@@ -208,30 +197,29 @@ func (sw *StreamWriter) AddTable(hCell, vCell, opts string) error {
 			TableColumn: tableColumn,
 		},
 		TableStyleInfo: &xlsxTableStyleInfo{
-			Name:              options.TableStyle,
-			ShowFirstColumn:   options.ShowFirstColumn,
-			ShowLastColumn:    options.ShowLastColumn,
-			ShowRowStripes:    options.ShowRowStripes,
-			ShowColumnStripes: options.ShowColumnStripes,
+			Name:              formatSet.TableStyle,
+			ShowFirstColumn:   formatSet.ShowFirstColumn,
+			ShowLastColumn:    formatSet.ShowLastColumn,
+			ShowRowStripes:    formatSet.ShowRowStripes,
+			ShowColumnStripes: formatSet.ShowColumnStripes,
 		},
 	}
 
 	sheetRelationshipsTableXML := "../tables/table" + strconv.Itoa(tableID) + ".xml"
-	tableXML := strings.ReplaceAll(sheetRelationshipsTableXML, "..", "xl")
+	tableXML := strings.Replace(sheetRelationshipsTableXML, "..", "xl", -1)
 
 	// Add first table for given sheet.
-	sheetPath := sw.file.sheetMap[trimSheetName(sw.Sheet)]
+	sheetPath := sw.File.sheetMap[trimSheetName(sw.Sheet)]
 	sheetRels := "xl/worksheets/_rels/" + strings.TrimPrefix(sheetPath, "xl/worksheets/") + ".rels"
-	rID := sw.file.addRels(sheetRels, SourceRelationshipTable, sheetRelationshipsTableXML, "")
+	rID := sw.File.addRels(sheetRels, SourceRelationshipTable, sheetRelationshipsTableXML, "")
 
 	sw.tableParts = fmt.Sprintf(`<tableParts count="1"><tablePart r:id="rId%d"></tablePart></tableParts>`, rID)
 
-	if err = sw.file.addContentTypePart(tableID, "table"); err != nil {
-		return err
-	}
+	sw.File.addContentTypePart(tableID, "table")
+
 	b, _ := xml.Marshal(table)
-	sw.file.saveFileList(tableXML, b)
-	return err
+	sw.File.saveFileList(tableXML, b)
+	return nil
 }
 
 // Extract values from a row in the StreamWriter.
@@ -243,7 +231,7 @@ func (sw *StreamWriter) getRowValues(hRow, hCol, vCol int) (res []string, err er
 		return nil, err
 	}
 
-	dec := sw.file.xmlNewDecoder(r)
+	dec := sw.File.xmlNewDecoder(r)
 	for {
 		token, err := dec.Token()
 		if err == io.EOF {
@@ -269,7 +257,7 @@ func (sw *StreamWriter) getRowValues(hRow, hCol, vCol int) (res []string, err er
 			if col < hCol || col > vCol {
 				continue
 			}
-			res[col-hCol], _ = c.getValueFrom(sw.file, nil, false)
+			res[col-hCol] = c.V
 		}
 		return res, nil
 	}
@@ -310,54 +298,9 @@ type Cell struct {
 // RowOpts define the options for the set row, it can be used directly in
 // StreamWriter.SetRow to specify the style and properties of the row.
 type RowOpts struct {
-	Height       float64
-	Hidden       bool
-	StyleID      int
-	OutlineLevel int
-}
-
-// marshalAttrs prepare attributes of the row.
-func (r *RowOpts) marshalAttrs() (strings.Builder, error) {
-	var (
-		err   error
-		attrs strings.Builder
-	)
-	if r == nil {
-		return attrs, err
-	}
-	if r.Height > MaxRowHeight {
-		err = ErrMaxRowHeight
-		return attrs, err
-	}
-	if r.StyleID > 0 {
-		attrs.WriteString(` s="`)
-		attrs.WriteString(strconv.Itoa(r.StyleID))
-		attrs.WriteString(`" customFormat="1"`)
-	}
-	if r.Height > 0 {
-		attrs.WriteString(` ht="`)
-		attrs.WriteString(strconv.FormatFloat(r.Height, 'f', -1, 64))
-		attrs.WriteString(`" customHeight="1"`)
-	}
-	if r.Hidden {
-		attrs.WriteString(` hidden="1"`)
-	}
-	if r.OutlineLevel > 0 && r.OutlineLevel < 8 {
-		attrs.WriteString(` outlineLevel="`)
-		attrs.WriteString(strconv.Itoa(r.OutlineLevel))
-		attrs.WriteString(`"`)
-	}
-	return attrs, err
-}
-
-// parseRowOpts provides a function to parse the optional settings for
-// *StreamWriter.SetRow.
-func parseRowOpts(opts ...RowOpts) *RowOpts {
-	options := &RowOpts{}
-	for _, opt := range opts {
-		options = &opt
-	}
-	return options
+	Height  float64
+	Hidden  bool
+	StyleID int
 }
 
 // SetRow writes an array to stream rows by giving a worksheet name, starting
@@ -366,35 +309,29 @@ func parseRowOpts(opts ...RowOpts) *RowOpts {
 //
 // As a special case, if Cell is used as a value, then the Cell.StyleID will be
 // applied to that cell.
-func (sw *StreamWriter) SetRow(cell string, values []interface{}, opts ...RowOpts) error {
-	col, row, err := CellNameToCoordinates(cell)
+func (sw *StreamWriter) SetRow(axis string, values []interface{}, opts ...RowOpts) error {
+	col, row, err := CellNameToCoordinates(axis)
 	if err != nil {
 		return err
 	}
-	if row <= sw.rows {
-		return newStreamSetRowError(row)
-	}
-	sw.rows = row
-	sw.writeSheetData()
-	options := parseRowOpts(opts...)
-	attrs, err := options.marshalAttrs()
-	if err != nil {
-		return err
-	}
-	_, _ = sw.rawData.WriteString(`<row r="`)
-	_, _ = sw.rawData.WriteString(strconv.Itoa(row))
-	_, _ = sw.rawData.WriteString(`"`)
-	_, _ = sw.rawData.WriteString(attrs.String())
-	_, _ = sw.rawData.WriteString(`>`)
-	for i, val := range values {
-		if val == nil {
-			continue
+	if !sw.sheetWritten {
+		if len(sw.cols) > 0 {
+			_, _ = sw.rawData.WriteString("<cols>" + sw.cols + "</cols>")
 		}
-		ref, err := CoordinatesToCellName(col+i, row)
+		_, _ = sw.rawData.WriteString(`<sheetData>`)
+		sw.sheetWritten = true
+	}
+	attrs, err := marshalRowAttrs(opts...)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&sw.rawData, `<row r="%d"%s>`, row, attrs)
+	for i, val := range values {
+		axis, err := CoordinatesToCellName(col+i, row)
 		if err != nil {
 			return err
 		}
-		c := xlsxC{R: ref, S: options.StyleID}
+		c := xlsxC{R: axis}
 		if v, ok := val.(Cell); ok {
 			c.S = v.StyleID
 			val = v.Value
@@ -414,17 +351,46 @@ func (sw *StreamWriter) SetRow(cell string, values []interface{}, opts ...RowOpt
 	return sw.rawData.Sync()
 }
 
+// marshalRowAttrs prepare attributes of the row by given options.
+func marshalRowAttrs(opts ...RowOpts) (attrs string, err error) {
+	var opt *RowOpts
+	for i := range opts {
+		opt = &opts[i]
+	}
+	if opt == nil {
+		return
+	}
+	if opt.Height > MaxRowHeight {
+		err = ErrMaxRowHeight
+		return
+	}
+	if opt.StyleID > 0 {
+		attrs += fmt.Sprintf(` s="%d" customFormat="true"`, opt.StyleID)
+	}
+	if opt.Height > 0 {
+		attrs += fmt.Sprintf(` ht="%v" customHeight="true"`, opt.Height)
+	}
+	if opt.Hidden {
+		attrs += ` hidden="true"`
+	}
+	return
+}
+
 // SetColWidth provides a function to set the width of a single column or
 // multiple columns for the StreamWriter. Note that you must call
 // the 'SetColWidth' function before the 'SetRow' function. For example set
 // the width column B:C as 20:
 //
-//	err := streamWriter.SetColWidth(2, 3, 20)
+//    err := streamWriter.SetColWidth(2, 3, 20)
+//
 func (sw *StreamWriter) SetColWidth(min, max int, width float64) error {
 	if sw.sheetWritten {
 		return ErrStreamSetColWidth
 	}
-	if min < MinColumns || min > MaxColumns || max < MinColumns || max > MaxColumns {
+	if min > TotalColumns || max > TotalColumns {
+		return ErrColumnNumber
+	}
+	if min < 1 || max < 1 {
 		return ErrColumnNumber
 	}
 	if width > MaxColumnWidth {
@@ -433,79 +399,32 @@ func (sw *StreamWriter) SetColWidth(min, max int, width float64) error {
 	if min > max {
 		min, max = max, min
 	}
-
-	sw.cols.WriteString(`<col min="`)
-	sw.cols.WriteString(strconv.Itoa(min))
-	sw.cols.WriteString(`" max="`)
-	sw.cols.WriteString(strconv.Itoa(max))
-	sw.cols.WriteString(`" width="`)
-	sw.cols.WriteString(strconv.FormatFloat(width, 'f', -1, 64))
-	sw.cols.WriteString(`" customWidth="1"/>`)
+	sw.cols += fmt.Sprintf(`<col min="%d" max="%d" width="%f" customWidth="1"/>`, min, max, width)
 	return nil
 }
 
-// InsertPageBreak create a page break to determine where the printed page
-// ends and where begins the next one by given worksheet name and cell
-// reference, so the content before the page break will be printed on one page
-// and after the page break on another.
-func (sw *StreamWriter) InsertPageBreak(cell string) error {
-	return sw.worksheet.insertPageBreak(cell)
-}
-
-// SetPanes provides a function to create and remove freeze panes and split
-// panes by given worksheet name and panes options for the StreamWriter. Note
-// that you must call the 'SetPanes' function before the 'SetRow' function.
-func (sw *StreamWriter) SetPanes(panes string) error {
-	if sw.sheetWritten {
-		return ErrStreamSetPanes
-	}
-	return sw.worksheet.setPanes(panes)
-}
-
-// MergeCell provides a function to merge cells by a given range reference for
+// MergeCell provides a function to merge cells by a given coordinate area for
 // the StreamWriter. Don't create a merged cell that overlaps with another
 // existing merged cell.
 func (sw *StreamWriter) MergeCell(hCell, vCell string) error {
-	_, err := cellRefsToCoordinates(hCell, vCell)
+	_, err := areaRangeToCoordinates(hCell, vCell)
 	if err != nil {
 		return err
 	}
 	sw.mergeCellsCount++
-	_, _ = sw.mergeCells.WriteString(`<mergeCell ref="`)
-	_, _ = sw.mergeCells.WriteString(hCell)
-	_, _ = sw.mergeCells.WriteString(`:`)
-	_, _ = sw.mergeCells.WriteString(vCell)
-	_, _ = sw.mergeCells.WriteString(`"/>`)
+	sw.mergeCells += fmt.Sprintf(`<mergeCell ref="%s:%s"/>`, hCell, vCell)
 	return nil
 }
 
 // setCellFormula provides a function to set formula of a cell.
 func setCellFormula(c *xlsxC, formula string) {
 	if formula != "" {
-		c.T, c.F = "str", &xlsxF{Content: formula}
+		c.F = &xlsxF{Content: formula}
 	}
-}
-
-// setCellTime provides a function to set number of a cell with a time.
-func (sw *StreamWriter) setCellTime(c *xlsxC, val time.Time) error {
-	var date1904, isNum bool
-	wb, err := sw.file.workbookReader()
-	if err != nil {
-		return err
-	}
-	if wb != nil && wb.WorkbookPr != nil {
-		date1904 = wb.WorkbookPr.Date1904
-	}
-	if isNum, err = c.setCellTime(val, date1904); err == nil && isNum && c.S == 0 {
-		style, _ := sw.file.NewStyle(&Style{NumFmt: 22})
-		c.S = style
-	}
-	return nil
 }
 
 // setCellValFunc provides a function to set value of a cell.
-func (sw *StreamWriter) setCellValFunc(c *xlsxC, val interface{}) error {
-	var err error
+func (sw *StreamWriter) setCellValFunc(c *xlsxC, val interface{}) (err error) {
 	switch val := val.(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		err = setCellIntFunc(c, val)
@@ -514,22 +433,24 @@ func (sw *StreamWriter) setCellValFunc(c *xlsxC, val interface{}) error {
 	case float64:
 		c.T, c.V = setCellFloat(val, -1, 64)
 	case string:
-		c.setCellValue(val)
+		c.T, c.V, c.XMLSpace = setCellStr(val)
 	case []byte:
-		c.setCellValue(string(val))
+		c.T, c.V, c.XMLSpace = setCellStr(string(val))
 	case time.Duration:
 		c.T, c.V = setCellDuration(val)
 	case time.Time:
-		err = sw.setCellTime(c, val)
+		var isNum bool
+		c.T, c.V, isNum, err = setCellTime(val)
+		if isNum && c.S == 0 {
+			style, _ := sw.File.NewStyle(&Style{NumFmt: 22})
+			c.S = style
+		}
 	case bool:
 		c.T, c.V = setCellBool(val)
 	case nil:
-		c.setCellValue("")
-	case []RichTextRun:
-		c.T, c.IS = "inlineStr", &xlsxSI{}
-		c.IS.R, err = setRichText(val)
+		c.T, c.V, c.XMLSpace = setCellStr("")
 	default:
-		c.setCellValue(fmt.Sprint(val))
+		c.T, c.V, c.XMLSpace = setCellStr(fmt.Sprint(val))
 	}
 	return err
 }
@@ -562,28 +483,17 @@ func setCellIntFunc(c *xlsxC, val interface{}) (err error) {
 	return
 }
 
-// writeCell constructs a cell XML and writes it to the buffer.
 func writeCell(buf *bufferedWriter, c xlsxC) {
 	_, _ = buf.WriteString(`<c`)
 	if c.XMLSpace.Value != "" {
-		_, _ = buf.WriteString(` xml:`)
-		_, _ = buf.WriteString(c.XMLSpace.Name.Local)
-		_, _ = buf.WriteString(`="`)
-		_, _ = buf.WriteString(c.XMLSpace.Value)
-		_, _ = buf.WriteString(`"`)
+		fmt.Fprintf(buf, ` xml:%s="%s"`, c.XMLSpace.Name.Local, c.XMLSpace.Value)
 	}
-	_, _ = buf.WriteString(` r="`)
-	_, _ = buf.WriteString(c.R)
-	_, _ = buf.WriteString(`"`)
+	fmt.Fprintf(buf, ` r="%s"`, c.R)
 	if c.S != 0 {
-		_, _ = buf.WriteString(` s="`)
-		_, _ = buf.WriteString(strconv.Itoa(c.S))
-		_, _ = buf.WriteString(`"`)
+		fmt.Fprintf(buf, ` s="%d"`, c.S)
 	}
 	if c.T != "" {
-		_, _ = buf.WriteString(` t="`)
-		_, _ = buf.WriteString(c.T)
-		_, _ = buf.WriteString(`"`)
+		fmt.Fprintf(buf, ` t="%s"`, c.T)
 	}
 	_, _ = buf.WriteString(`>`)
 	if c.F != nil {
@@ -596,59 +506,21 @@ func writeCell(buf *bufferedWriter, c xlsxC) {
 		_ = xml.EscapeText(buf, []byte(c.V))
 		_, _ = buf.WriteString(`</v>`)
 	}
-	if c.IS != nil {
-		if len(c.IS.R) > 0 {
-			is, _ := xml.Marshal(c.IS.R)
-			_, _ = buf.WriteString(`<is>`)
-			_, _ = buf.Write(is)
-			_, _ = buf.WriteString(`</is>`)
-		}
-		if c.IS.T != nil {
-			_, _ = buf.WriteString(`<is><t`)
-			if c.IS.T.Space.Value != "" {
-				_, _ = buf.WriteString(` xml:`)
-				_, _ = buf.WriteString(c.IS.T.Space.Name.Local)
-				_, _ = buf.WriteString(`="`)
-				_, _ = buf.WriteString(c.IS.T.Space.Value)
-				_, _ = buf.WriteString(`"`)
-			}
-			_, _ = buf.WriteString(`>`)
-			_, _ = buf.Write([]byte(c.IS.T.Val))
-			_, _ = buf.WriteString(`</t></is>`)
-		}
-	}
 	_, _ = buf.WriteString(`</c>`)
-}
-
-// writeSheetData prepares the element preceding sheetData and writes the
-// sheetData XML start element to the buffer.
-func (sw *StreamWriter) writeSheetData() {
-	if !sw.sheetWritten {
-		bulkAppendFields(&sw.rawData, sw.worksheet, 4, 5)
-		if sw.cols.Len() > 0 {
-			_, _ = sw.rawData.WriteString("<cols>")
-			_, _ = sw.rawData.WriteString(sw.cols.String())
-			_, _ = sw.rawData.WriteString("</cols>")
-		}
-		_, _ = sw.rawData.WriteString(`<sheetData>`)
-		sw.sheetWritten = true
-	}
 }
 
 // Flush ending the streaming writing process.
 func (sw *StreamWriter) Flush() error {
-	sw.writeSheetData()
+	if !sw.sheetWritten {
+		_, _ = sw.rawData.WriteString(`<sheetData>`)
+		sw.sheetWritten = true
+	}
 	_, _ = sw.rawData.WriteString(`</sheetData>`)
 	bulkAppendFields(&sw.rawData, sw.worksheet, 8, 15)
-	mergeCells := strings.Builder{}
 	if sw.mergeCellsCount > 0 {
-		_, _ = mergeCells.WriteString(`<mergeCells count="`)
-		_, _ = mergeCells.WriteString(strconv.Itoa(sw.mergeCellsCount))
-		_, _ = mergeCells.WriteString(`">`)
-		_, _ = mergeCells.WriteString(sw.mergeCells.String())
-		_, _ = mergeCells.WriteString(`</mergeCells>`)
+		sw.mergeCells = fmt.Sprintf(`<mergeCells count="%d">%s</mergeCells>`, sw.mergeCellsCount, sw.mergeCells)
 	}
-	_, _ = sw.rawData.WriteString(mergeCells.String())
+	_, _ = sw.rawData.WriteString(sw.mergeCells)
 	bulkAppendFields(&sw.rawData, sw.worksheet, 17, 38)
 	_, _ = sw.rawData.WriteString(sw.tableParts)
 	bulkAppendFields(&sw.rawData, sw.worksheet, 40, 40)
@@ -657,10 +529,10 @@ func (sw *StreamWriter) Flush() error {
 		return err
 	}
 
-	sheetPath := sw.file.sheetMap[trimSheetName(sw.Sheet)]
-	sw.file.Sheet.Delete(sheetPath)
-	delete(sw.file.checked, sheetPath)
-	sw.file.Pkg.Delete(sheetPath)
+	sheetPath := sw.File.sheetMap[trimSheetName(sw.Sheet)]
+	sw.File.Sheet.Delete(sheetPath)
+	delete(sw.File.checked, sheetPath)
+	sw.File.Pkg.Delete(sheetPath)
 
 	return nil
 }
@@ -686,12 +558,12 @@ type bufferedWriter struct {
 	buf bytes.Buffer
 }
 
-// Write to the in-memory buffer. The error is always nil.
+// Write to the in-memory buffer. The err is always nil.
 func (bw *bufferedWriter) Write(p []byte) (n int, err error) {
 	return bw.buf.Write(p)
 }
 
-// WriteString write to the in-memory buffer. The error is always nil.
+// WriteString wite to the in-memory buffer. The err is always nil.
 func (bw *bufferedWriter) WriteString(p string) (n int, err error) {
 	return bw.buf.WriteString(p)
 }
@@ -720,7 +592,7 @@ func (bw *bufferedWriter) Sync() (err error) {
 		return nil
 	}
 	if bw.tmp == nil {
-		bw.tmp, err = os.CreateTemp(os.TempDir(), "excelize-")
+		bw.tmp, err = ioutil.TempFile(os.TempDir(), "excelize-")
 		if err != nil {
 			// can not use local storage
 			return nil

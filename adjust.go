@@ -11,13 +11,6 @@
 
 package excelize
 
-import (
-	"bytes"
-	"encoding/xml"
-	"io"
-	"strings"
-)
-
 type adjustDirection bool
 
 const (
@@ -35,6 +28,7 @@ const (
 // offset: Number of rows/column to insert/delete negative values indicate deletion
 //
 // TODO: adjustPageBreaks, adjustComments, adjustDataValidations, adjustProtectedCells
+//
 func (f *File) adjustHelper(sheet string, dir adjustDirection, num, offset int) error {
 	ws, err := f.workSheetReader(sheet)
 	if err != nil {
@@ -42,15 +36,11 @@ func (f *File) adjustHelper(sheet string, dir adjustDirection, num, offset int) 
 	}
 	sheetID := f.getSheetID(sheet)
 	if dir == rows {
-		err = f.adjustRowDimensions(ws, num, offset)
+		f.adjustRowDimensions(ws, num, offset)
 	} else {
-		err = f.adjustColDimensions(ws, num, offset)
-	}
-	if err != nil {
-		return err
+		f.adjustColDimensions(ws, num, offset)
 	}
 	f.adjustHyperlinks(ws, sheet, dir, num, offset)
-	f.adjustTable(ws, sheet, dir, num, offset)
 	if err = f.adjustMergeCells(ws, dir, num, offset); err != nil {
 		return err
 	}
@@ -70,92 +60,30 @@ func (f *File) adjustHelper(sheet string, dir adjustDirection, num, offset int) 
 	return nil
 }
 
-// adjustCols provides a function to update column style when inserting or
-// deleting columns.
-func (f *File) adjustCols(ws *xlsxWorksheet, col, offset int) error {
-	if ws.Cols == nil {
-		return nil
-	}
-	for i := 0; i < len(ws.Cols.Col); i++ {
-		if offset > 0 {
-			if ws.Cols.Col[i].Max+1 == col {
-				ws.Cols.Col[i].Max += offset
-				continue
-			}
-			if ws.Cols.Col[i].Min >= col {
-				ws.Cols.Col[i].Min += offset
-				ws.Cols.Col[i].Max += offset
-				continue
-			}
-			if ws.Cols.Col[i].Min < col && ws.Cols.Col[i].Max >= col {
-				ws.Cols.Col[i].Max += offset
-			}
-		}
-		if offset < 0 {
-			if ws.Cols.Col[i].Min == col && ws.Cols.Col[i].Max == col {
-				if len(ws.Cols.Col) > 1 {
-					ws.Cols.Col = append(ws.Cols.Col[:i], ws.Cols.Col[i+1:]...)
-				} else {
-					ws.Cols.Col = nil
-				}
-				i--
-				continue
-			}
-			if ws.Cols.Col[i].Min > col {
-				ws.Cols.Col[i].Min += offset
-				ws.Cols.Col[i].Max += offset
-				continue
-			}
-			if ws.Cols.Col[i].Min <= col && ws.Cols.Col[i].Max >= col {
-				ws.Cols.Col[i].Max += offset
-			}
-		}
-	}
-	return nil
-}
-
 // adjustColDimensions provides a function to update column dimensions when
 // inserting or deleting rows or columns.
-func (f *File) adjustColDimensions(ws *xlsxWorksheet, col, offset int) error {
-	for rowIdx := range ws.SheetData.Row {
-		for _, v := range ws.SheetData.Row[rowIdx].C {
-			if cellCol, _, _ := CellNameToCoordinates(v.R); col <= cellCol {
-				if newCol := cellCol + offset; newCol > 0 && newCol > MaxColumns {
-					return ErrColumnNumber
-				}
-			}
-		}
-	}
+func (f *File) adjustColDimensions(ws *xlsxWorksheet, col, offset int) {
 	for rowIdx := range ws.SheetData.Row {
 		for colIdx, v := range ws.SheetData.Row[rowIdx].C {
-			if cellCol, cellRow, _ := CellNameToCoordinates(v.R); col <= cellCol {
+			cellCol, cellRow, _ := CellNameToCoordinates(v.R)
+			if col <= cellCol {
 				if newCol := cellCol + offset; newCol > 0 {
 					ws.SheetData.Row[rowIdx].C[colIdx].R, _ = CoordinatesToCellName(newCol, cellRow)
 				}
 			}
 		}
 	}
-	return f.adjustCols(ws, col, offset)
 }
 
 // adjustRowDimensions provides a function to update row dimensions when
 // inserting or deleting rows or columns.
-func (f *File) adjustRowDimensions(ws *xlsxWorksheet, row, offset int) error {
-	totalRows := len(ws.SheetData.Row)
-	if totalRows == 0 {
-		return nil
-	}
-	lastRow := &ws.SheetData.Row[totalRows-1]
-	if newRow := lastRow.R + offset; lastRow.R >= row && newRow > 0 && newRow >= TotalRows {
-		return ErrMaxRows
-	}
-	for i := 0; i < len(ws.SheetData.Row); i++ {
+func (f *File) adjustRowDimensions(ws *xlsxWorksheet, row, offset int) {
+	for i := range ws.SheetData.Row {
 		r := &ws.SheetData.Row[i]
 		if newRow := r.R + offset; r.R >= row && newRow > 0 {
 			f.adjustSingleRowDimensions(r, newRow)
 		}
 	}
-	return nil
 }
 
 // adjustSingleRowDimensions provides a function to adjust single row dimensions.
@@ -210,54 +138,6 @@ func (f *File) adjustHyperlinks(ws *xlsxWorksheet, sheet string, dir adjustDirec
 	}
 }
 
-// adjustTable provides a function to update the table when inserting or
-// deleting rows or columns.
-func (f *File) adjustTable(ws *xlsxWorksheet, sheet string, dir adjustDirection, num, offset int) {
-	if ws.TableParts == nil || len(ws.TableParts.TableParts) == 0 {
-		return
-	}
-	for idx := 0; idx < len(ws.TableParts.TableParts); idx++ {
-		tbl := ws.TableParts.TableParts[idx]
-		target := f.getSheetRelationshipsTargetByID(sheet, tbl.RID)
-		tableXML := strings.ReplaceAll(target, "..", "xl")
-		content, ok := f.Pkg.Load(tableXML)
-		if !ok {
-			continue
-		}
-		t := xlsxTable{}
-		if err := f.xmlNewDecoder(bytes.NewReader(namespaceStrictToTransitional(content.([]byte)))).
-			Decode(&t); err != nil && err != io.EOF {
-			return
-		}
-		coordinates, err := rangeRefToCoordinates(t.Ref)
-		if err != nil {
-			return
-		}
-		// Remove the table when deleting the header row of the table
-		if dir == rows && num == coordinates[0] {
-			ws.TableParts.TableParts = append(ws.TableParts.TableParts[:idx], ws.TableParts.TableParts[idx+1:]...)
-			ws.TableParts.Count = len(ws.TableParts.TableParts)
-			idx--
-			continue
-		}
-		coordinates = f.adjustAutoFilterHelper(dir, coordinates, num, offset)
-		x1, y1, x2, y2 := coordinates[0], coordinates[1], coordinates[2], coordinates[3]
-		if y2-y1 < 2 || x2-x1 < 1 {
-			ws.TableParts.TableParts = append(ws.TableParts.TableParts[:idx], ws.TableParts.TableParts[idx+1:]...)
-			ws.TableParts.Count = len(ws.TableParts.TableParts)
-			idx--
-			continue
-		}
-		t.Ref, _ = f.coordinatesToRangeRef([]int{x1, y1, x2, y2})
-		if t.AutoFilter != nil {
-			t.AutoFilter.Ref = t.Ref
-		}
-		_, _ = f.setTableHeader(sheet, x1, y1, x2)
-		table, _ := xml.Marshal(t)
-		f.saveFileList(tableXML, table)
-	}
-}
-
 // adjustAutoFilter provides a function to update the auto filter when
 // inserting or deleting rows or columns.
 func (f *File) adjustAutoFilter(ws *xlsxWorksheet, dir adjustDirection, num, offset int) error {
@@ -265,7 +145,7 @@ func (f *File) adjustAutoFilter(ws *xlsxWorksheet, dir adjustDirection, num, off
 		return nil
 	}
 
-	coordinates, err := rangeRefToCoordinates(ws.AutoFilter.Ref)
+	coordinates, err := areaRefToCoordinates(ws.AutoFilter.Ref)
 	if err != nil {
 		return err
 	}
@@ -279,19 +159,21 @@ func (f *File) adjustAutoFilter(ws *xlsxWorksheet, dir adjustDirection, num, off
 				rowData.Hidden = false
 			}
 		}
-		return err
+		return nil
 	}
 
 	coordinates = f.adjustAutoFilterHelper(dir, coordinates, num, offset)
 	x1, y1, x2, y2 = coordinates[0], coordinates[1], coordinates[2], coordinates[3]
 
-	ws.AutoFilter.Ref, err = f.coordinatesToRangeRef([]int{x1, y1, x2, y2})
-	return err
+	if ws.AutoFilter.Ref, err = f.coordinatesToAreaRef([]int{x1, y1, x2, y2}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // adjustAutoFilterHelper provides a function for adjusting auto filter to
-// compare and calculate cell reference by the given adjust direction, operation
-// reference and offset.
+// compare and calculate cell axis by the given adjust direction, operation
+// axis and offset.
 func (f *File) adjustAutoFilterHelper(dir adjustDirection, coordinates []int, num, offset int) []int {
 	if dir == rows {
 		if coordinates[1] >= num {
@@ -300,13 +182,10 @@ func (f *File) adjustAutoFilterHelper(dir adjustDirection, coordinates []int, nu
 		if coordinates[3] >= num {
 			coordinates[3] += offset
 		}
-		return coordinates
-	}
-	if coordinates[0] >= num {
-		coordinates[0] += offset
-	}
-	if coordinates[2] >= num {
-		coordinates[2] += offset
+	} else {
+		if coordinates[2] >= num {
+			coordinates[2] += offset
+		}
 	}
 	return coordinates
 }
@@ -319,12 +198,8 @@ func (f *File) adjustMergeCells(ws *xlsxWorksheet, dir adjustDirection, num, off
 	}
 
 	for i := 0; i < len(ws.MergeCells.Cells); i++ {
-		mergedCells := ws.MergeCells.Cells[i]
-		mergedCellsRef := mergedCells.Ref
-		if !strings.Contains(mergedCellsRef, ":") {
-			mergedCellsRef += ":" + mergedCellsRef
-		}
-		coordinates, err := rangeRefToCoordinates(mergedCellsRef)
+		areaData := ws.MergeCells.Cells[i]
+		coordinates, err := areaRefToCoordinates(areaData.Ref)
 		if err != nil {
 			return err
 		}
@@ -351,8 +226,8 @@ func (f *File) adjustMergeCells(ws *xlsxWorksheet, dir adjustDirection, num, off
 			i--
 			continue
 		}
-		mergedCells.rect = []int{x1, y1, x2, y2}
-		if mergedCells.Ref, err = f.coordinatesToRangeRef([]int{x1, y1, x2, y2}); err != nil {
+		areaData.rect = []int{x1, y1, x2, y2}
+		if areaData.Ref, err = f.coordinatesToAreaRef([]int{x1, y1, x2, y2}); err != nil {
 			return err
 		}
 	}
@@ -360,7 +235,7 @@ func (f *File) adjustMergeCells(ws *xlsxWorksheet, dir adjustDirection, num, off
 }
 
 // adjustMergeCellsHelper provides a function for adjusting merge cells to
-// compare and calculate cell reference by the given pivot, operation reference and
+// compare and calculate cell axis by the given pivot, operation axis and
 // offset.
 func (f *File) adjustMergeCellsHelper(p1, p2, num, offset int) (int, int) {
 	if p2 < p1 {

@@ -29,7 +29,6 @@ var (
 	NameSpaceDrawingML                      = xml.Attr{Name: xml.Name{Local: "a", Space: "xmlns"}, Value: "http://schemas.openxmlformats.org/drawingml/2006/main"}
 	NameSpaceDrawingMLChart                 = xml.Attr{Name: xml.Name{Local: "c", Space: "xmlns"}, Value: "http://schemas.openxmlformats.org/drawingml/2006/chart"}
 	NameSpaceDrawingMLSpreadSheet           = xml.Attr{Name: xml.Name{Local: "xdr", Space: "xmlns"}, Value: "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"}
-	NameSpaceDrawing2016SVG                 = xml.Attr{Name: xml.Name{Local: "asvg", Space: "xmlns"}, Value: "http://schemas.microsoft.com/office/drawing/2016/SVG/main"}
 	NameSpaceSpreadSheetX15                 = xml.Attr{Name: xml.Name{Local: "x15", Space: "xmlns"}, Value: "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"}
 	NameSpaceSpreadSheetExcel2006Main       = xml.Attr{Name: xml.Name{Local: "xne", Space: "xmlns"}, Value: "http://schemas.microsoft.com/office/excel/2006/main"}
 	NameSpaceMacExcel2008Main               = xml.Attr{Name: xml.Name{Local: "mx", Space: "xmlns"}, Value: "http://schemas.microsoft.com/office/mac/excel/2008/main"}
@@ -96,7 +95,6 @@ const (
 	ExtURITimelineRefs           = "{7E03D99C-DC04-49d9-9315-930204A7B6E9}"
 	ExtURIDrawingBlip            = "{28A0092B-C50C-407E-A947-70E740481C1C}"
 	ExtURIMacExcelMX             = "{64002731-A6B0-56B0-2670-7721B7C09600}"
-	ExtURISVG                    = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
 )
 
 // Excel specifications and limits
@@ -105,15 +103,12 @@ const (
 	StreamChunkSize      = 1 << 24
 	MaxFontFamilyLength  = 31
 	MaxFontSize          = 409
-	MaxFilePathLength    = 207
+	MaxFileNameLength    = 207
 	MaxFieldLength       = 255
 	MaxColumnWidth       = 255
 	MaxRowHeight         = 409
-	MaxCellStyles        = 64000
-	MinFontSize          = 1
 	TotalRows            = 1048576
-	MinColumns           = 1
-	MaxColumns           = 16384
+	TotalColumns         = 16384
 	TotalSheetHyperlinks = 65529
 	TotalCellChars       = 32767
 	// pivotTableVersion should be greater than 3. One or more of the
@@ -123,72 +118,7 @@ const (
 	pivotTableVersion = 3
 )
 
-// ColorMappingType is the type of color transformation.
-type ColorMappingType byte
-
-// Color transformation types enumeration.
-const (
-	ColorMappingTypeLight1 ColorMappingType = iota
-	ColorMappingTypeDark1
-	ColorMappingTypeLight2
-	ColorMappingTypeDark2
-	ColorMappingTypeAccent1
-	ColorMappingTypeAccent2
-	ColorMappingTypeAccent3
-	ColorMappingTypeAccent4
-	ColorMappingTypeAccent5
-	ColorMappingTypeAccent6
-	ColorMappingTypeHyperlink
-	ColorMappingTypeFollowedHyperlink
-	ColorMappingTypeUnset int = -1
-)
-
-// IndexedColorMapping is the table of default mappings from indexed color value
-// to RGB value. Note that 0-7 are redundant of 8-15 to preserve backwards
-// compatibility. A legacy indexing scheme for colors that is still required
-// for some records, and for backwards compatibility with legacy formats. This
-// element contains a sequence of RGB color values that correspond to color
-// indexes (zero-based). When using the default indexed color palette, the
-// values are not written out, but instead are implied. When the color palette
-// has been modified from default, then the entire color palette is written
-// out.
-var IndexedColorMapping = []string{
-	"000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
-	"000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
-	"800000", "008000", "000080", "808000", "800080", "008080", "C0C0C0", "808080",
-	"9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF",
-	"000080", "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF",
-	"00CCFF", "CCFFFF", "CCFFCC", "FFFF99", "99CCFF", "FF99CC", "CC99FF", "FFCC99",
-	"3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699", "969696",
-	"003366", "339966", "003300", "333300", "993300", "993366", "333399", "333333",
-	"000000", "FFFFFF",
-}
-
-// supportedImageTypes defined supported image types.
-var supportedImageTypes = map[string]string{
-	".emf": ".emf", ".emz": ".emz", ".gif": ".gif", ".jpeg": ".jpeg",
-	".jpg": ".jpeg", ".png": ".png", ".svg": ".svg", ".tif": ".tiff",
-	".tiff": ".tiff", ".wmf": ".wmf", ".wmz": ".wmz",
-}
-
-// supportedContentTypes defined supported file format types.
-var supportedContentTypes = map[string]string{
-	".xlam": ContentTypeAddinMacro,
-	".xlsm": ContentTypeMacro,
-	".xlsx": ContentTypeSheetML,
-	".xltm": ContentTypeTemplateMacro,
-	".xltx": ContentTypeTemplate,
-}
-
-// supportedUnderlineTypes defined supported underline types.
-var supportedUnderlineTypes = []string{"none", "single", "double"}
-
-// supportedDrawingUnderlineTypes defined supported underline types in drawing
-// markup language.
-var supportedDrawingUnderlineTypes = []string{
-	"none", "words", "sng", "dbl", "heavy", "dotted", "dottedHeavy", "dash", "dashHeavy", "dashLong", "dashLongHeavy", "dotDash", "dotDashHeavy", "dotDotDash", "dotDotDashHeavy", "wavy", "wavyHeavy",
-	"wavyDbl",
-}
+var supportImageTypes = map[string]string{".gif": ".gif", ".jpg": ".jpeg", ".jpeg": ".jpeg", ".png": ".png", ".tif": ".tiff", ".tiff": ".tiff"}
 
 // xlsxCNvPr directly maps the cNvPr (Non-Visual Drawing Properties). This
 // element specifies non-visual canvas properties. This allows for additional
@@ -237,10 +167,9 @@ type xlsxPicLocks struct {
 // xlsxBlip element specifies the existence of an image (binary large image or
 // picture) and contains a reference to the image data.
 type xlsxBlip struct {
-	Embed   string                        `xml:"r:embed,attr"`
-	Cstate  string                        `xml:"cstate,attr,omitempty"`
-	R       string                        `xml:"xmlns:r,attr"`
-	ExtList *xlsxEGOfficeArtExtensionList `xml:"a:extLst"`
+	Embed  string `xml:"r:embed,attr"`
+	Cstate string `xml:"cstate,attr,omitempty"`
+	R      string `xml:"xmlns:r,attr"`
 }
 
 // xlsxStretch directly maps the stretch element. This element specifies that a
@@ -298,28 +227,6 @@ type xlsxCNvPicPr struct {
 type xlsxNvPicPr struct {
 	CNvPr    xlsxCNvPr    `xml:"xdr:cNvPr"`
 	CNvPicPr xlsxCNvPicPr `xml:"xdr:cNvPicPr"`
-}
-
-// xlsxCTSVGBlip specifies a graphic element in Scalable Vector Graphics (SVG)
-// format.
-type xlsxCTSVGBlip struct {
-	XMLNSaAVG string `xml:"xmlns:asvg,attr"`
-	Embed     string `xml:"r:embed,attr"`
-	Link      string `xml:"r:link,attr,omitempty"`
-}
-
-// xlsxCTOfficeArtExtension used for future extensibility and is seen elsewhere
-// throughout the drawing area.
-type xlsxCTOfficeArtExtension struct {
-	XMLName xml.Name      `xml:"a:ext"`
-	URI     string        `xml:"uri,attr"`
-	SVGBlip xlsxCTSVGBlip `xml:"asvg:svgBlip"`
-}
-
-// xlsxEGOfficeArtExtensionList used for future extensibility and is seen
-// elsewhere throughout the drawing area.
-type xlsxEGOfficeArtExtensionList struct {
-	Ext []xlsxCTOfficeArtExtension `xml:"ext"`
 }
 
 // xlsxBlipFill directly maps the blipFill (Picture Fill). This element
@@ -553,8 +460,8 @@ type xdrTxBody struct {
 	P      []*aP    `xml:"a:p"`
 }
 
-// pictureOptions directly maps the format settings of the picture.
-type pictureOptions struct {
+// formatPicture directly maps the format settings of the picture.
+type formatPicture struct {
 	FPrintsWithSheet bool    `json:"print_obj"`
 	FLocksWithSheet  bool    `json:"locked"`
 	NoChangeAspect   bool    `json:"lock_aspect_ratio"`
@@ -568,33 +475,32 @@ type pictureOptions struct {
 	Positioning      string  `json:"positioning"`
 }
 
-// shapeOptions directly maps the format settings of the shape.
-type shapeOptions struct {
-	Macro     string                  `json:"macro"`
-	Type      string                  `json:"type"`
-	Width     int                     `json:"width"`
-	Height    int                     `json:"height"`
-	Format    pictureOptions          `json:"format"`
-	Color     shapeColorOptions       `json:"color"`
-	Line      lineOptions             `json:"line"`
-	Paragraph []shapeParagraphOptions `json:"paragraph"`
+// formatShape directly maps the format settings of the shape.
+type formatShape struct {
+	Type      string                 `json:"type"`
+	Width     int                    `json:"width"`
+	Height    int                    `json:"height"`
+	Format    formatPicture          `json:"format"`
+	Color     formatShapeColor       `json:"color"`
+	Line      formatLine             `json:"line"`
+	Paragraph []formatShapeParagraph `json:"paragraph"`
 }
 
-// shapeParagraphOptions directly maps the format settings of the paragraph in
+// formatShapeParagraph directly maps the format settings of the paragraph in
 // the shape.
-type shapeParagraphOptions struct {
+type formatShapeParagraph struct {
 	Font Font   `json:"font"`
 	Text string `json:"text"`
 }
 
-// shapeColorOptions directly maps the color settings of the shape.
-type shapeColorOptions struct {
+// formatShapeColor directly maps the color settings of the shape.
+type formatShapeColor struct {
 	Line   string `json:"line"`
 	Fill   string `json:"fill"`
 	Effect string `json:"effect"`
 }
 
-// lineOptions directly maps the line settings of the shape.
-type lineOptions struct {
+// formatLine directly maps the line settings of the shape.
+type formatLine struct {
 	Width float64 `json:"width"`
 }

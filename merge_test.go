@@ -65,7 +65,7 @@ func TestMergeCell(t *testing.T) {
 	assert.NoError(t, f.MergeCell("Sheet3", "N10", "O11"))
 
 	// Test get merged cells on not exists worksheet.
-	assert.EqualError(t, f.MergeCell("SheetN", "N10", "O11"), "sheet SheetN does not exist")
+	assert.EqualError(t, f.MergeCell("SheetN", "N10", "O11"), "sheet SheetN is not exist")
 
 	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestMergeCell.xlsx")))
 	assert.NoError(t, f.Close())
@@ -140,7 +140,7 @@ func TestGetMergeCells(t *testing.T) {
 
 	// Test get merged cells on not exists worksheet.
 	_, err = f.GetMergeCells("SheetN")
-	assert.EqualError(t, err, "sheet SheetN does not exist")
+	assert.EqualError(t, err, "sheet SheetN is not exist")
 	assert.NoError(t, f.Close())
 }
 
@@ -169,8 +169,8 @@ func TestUnmergeCell(t *testing.T) {
 
 	f = NewFile()
 	assert.NoError(t, f.MergeCell("Sheet1", "A2", "B3"))
-	// Test unmerged range reference on not exists worksheet.
-	assert.EqualError(t, f.UnmergeCell("SheetN", "A1", "A1"), "sheet SheetN does not exist")
+	// Test unmerged area on not exists worksheet.
+	assert.EqualError(t, f.UnmergeCell("SheetN", "A1", "A1"), "sheet SheetN is not exist")
 
 	ws, ok := f.Sheet.Load("xl/worksheets/sheet1.xml")
 	assert.True(t, ok)
@@ -185,7 +185,7 @@ func TestUnmergeCell(t *testing.T) {
 	ws, ok = f.Sheet.Load("xl/worksheets/sheet1.xml")
 	assert.True(t, ok)
 	ws.(*xlsxWorksheet).MergeCells = &xlsxMergeCells{Cells: []*xlsxMergeCell{{Ref: "A1"}}}
-	assert.NoError(t, f.UnmergeCell("Sheet1", "A2", "B3"))
+	assert.EqualError(t, f.UnmergeCell("Sheet1", "A2", "B3"), ErrParameterInvalid.Error())
 
 	ws, ok = f.Sheet.Load("xl/worksheets/sheet1.xml")
 	assert.True(t, ok)
@@ -194,12 +194,6 @@ func TestUnmergeCell(t *testing.T) {
 }
 
 func TestFlatMergedCells(t *testing.T) {
-	ws := &xlsxWorksheet{MergeCells: &xlsxMergeCells{Cells: []*xlsxMergeCell{{Ref: ""}}}}
-	assert.EqualError(t, flatMergedCells(ws, [][]*xlsxMergeCell{}), "cannot convert cell \"\" to coordinates: invalid cell name \"\"")
-}
-
-func TestMergeCellsParser(t *testing.T) {
-	f := NewFile()
-	_, err := f.mergeCellsParser(&xlsxWorksheet{MergeCells: &xlsxMergeCells{Cells: []*xlsxMergeCell{nil}}}, "A1")
-	assert.NoError(t, err)
+	ws := &xlsxWorksheet{MergeCells: &xlsxMergeCells{Cells: []*xlsxMergeCell{{Ref: "A1"}}}}
+	assert.EqualError(t, flatMergedCells(ws, [][]*xlsxMergeCell{}), ErrParameterInvalid.Error())
 }

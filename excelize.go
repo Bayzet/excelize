@@ -18,6 +18,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -62,9 +63,6 @@ type charsetTranscoderFn func(charset string, input io.Reader) (rdr io.Reader, e
 
 // Options define the options for open and reading spreadsheet.
 //
-// MaxCalcIterations specifies the maximum iterations for iterative
-// calculation, the default value is 0.
-//
 // Password specifies the password of the spreadsheet in plain text.
 //
 // RawCellValue specifies if apply the number format for the cell value or get
@@ -80,7 +78,6 @@ type charsetTranscoderFn func(charset string, input io.Reader) (rdr io.Reader, e
 // should be less than or equal to UnzipSizeLimit, the default value is
 // 16MB.
 type Options struct {
-	MaxCalcIterations uint
 	Password          string
 	RawCellValue      bool
 	UnzipSizeLimit    int64
@@ -91,18 +88,21 @@ type Options struct {
 // spreadsheet file struct for it. For example, open spreadsheet with
 // password protection:
 //
-//	f, err := excelize.OpenFile("Book1.xlsx", excelize.Options{Password: "password"})
-//	if err != nil {
-//	    return
-//	}
+//    f, err := excelize.OpenFile("Book1.xlsx", excelize.Options{Password: "password"})
+//    if err != nil {
+//        return
+//    }
 //
-// Close the file by Close function after opening the spreadsheet.
-func OpenFile(filename string, opts ...Options) (*File, error) {
+// Note that the excelize just support decrypt and not support encrypt
+// currently, the spreadsheet saved by Save and SaveAs will be without
+// password unprotected. Close the file by Close after opening the
+// spreadsheet.
+func OpenFile(filename string, opt ...Options) (*File, error) {
 	file, err := os.Open(filepath.Clean(filename))
 	if err != nil {
 		return nil, err
 	}
-	f, err := OpenReader(file, opts...)
+	f, err := OpenReader(file, opt...)
 	if err != nil {
 		closeErr := file.Close()
 		if closeErr == nil {
@@ -135,13 +135,13 @@ func newFile() *File {
 
 // OpenReader read data stream from io.Reader and return a populated
 // spreadsheet file.
-func OpenReader(r io.Reader, opts ...Options) (*File, error) {
-	b, err := io.ReadAll(r)
+func OpenReader(r io.Reader, opt ...Options) (*File, error) {
+	b, err := ioutil.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
 	f := newFile()
-	f.options = parseOptions(opts...)
+	f.options = parseOptions(opt...)
 	if f.options.UnzipSizeLimit == 0 {
 		f.options.UnzipSizeLimit = UnzipSizeLimit
 		if f.options.UnzipXMLSizeLimit > f.options.UnzipSizeLimit {
@@ -158,15 +158,13 @@ func OpenReader(r io.Reader, opts ...Options) (*File, error) {
 		return nil, ErrOptionsUnzipSizeLimit
 	}
 	if bytes.Contains(b, oleIdentifier) {
-		if b, err = Decrypt(b, f.options); err != nil {
-			return nil, ErrWorkbookFileFormat
+		b, err = Decrypt(b, f.options)
+		if err != nil {
+			return nil, fmt.Errorf("decrypted file failed")
 		}
 	}
 	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
-		if len(f.options.Password) > 0 {
-			return nil, ErrWorkbookPassword
-		}
 		return nil, err
 	}
 	file, sheetCount, err := f.ReadZipReader(zr)
@@ -177,25 +175,21 @@ func OpenReader(r io.Reader, opts ...Options) (*File, error) {
 	for k, v := range file {
 		f.Pkg.Store(k, v)
 	}
-	if f.CalcChain, err = f.calcChainReader(); err != nil {
-		return f, err
-	}
+	f.CalcChain = f.calcChainReader()
 	f.sheetMap = f.getSheetMap()
-	if f.Styles, err = f.stylesReader(); err != nil {
-		return f, err
-	}
-	f.Theme, err = f.themeReader()
-	return f, err
+	f.Styles = f.stylesReader()
+	f.Theme = f.themeReader()
+	return f, nil
 }
 
 // parseOptions provides a function to parse the optional settings for open
 // and reading spreadsheet.
 func parseOptions(opts ...Options) *Options {
-	options := &Options{}
-	for _, opt := range opts {
-		options = &opt
+	opt := &Options{}
+	for _, o := range opts {
+		opt = &o
 	}
-	return options
+	return opt
 }
 
 // CharsetTranscoder Set user defined codepage transcoder function for open
@@ -210,16 +204,16 @@ func (f *File) xmlNewDecoder(rdr io.Reader) (ret *xml.Decoder) {
 }
 
 // setDefaultTimeStyle provides a function to set default numbers format for
-// time.Time type cell value by given worksheet name, cell reference and
+// time.Time type cell value by given worksheet name, cell coordinates and
 // number format code.
-func (f *File) setDefaultTimeStyle(sheet, cell string, format int) error {
-	s, err := f.GetCellStyle(sheet, cell)
+func (f *File) setDefaultTimeStyle(sheet, axis string, format int) error {
+	s, err := f.GetCellStyle(sheet, axis)
 	if err != nil {
 		return err
 	}
 	if s == 0 {
 		style, _ := f.NewStyle(&Style{NumFmt: format})
-		err = f.SetCellStyle(sheet, cell, cell, style)
+		err = f.SetCellStyle(sheet, axis, axis, style)
 	}
 	return err
 }
@@ -233,19 +227,17 @@ func (f *File) workSheetReader(sheet string) (ws *xlsxWorksheet, err error) {
 		name string
 		ok   bool
 	)
-	if name, ok = f.getSheetXMLPath(sheet); !ok {
-		err = newNoExistSheetError(sheet)
+	if name, ok = f.sheetMap[trimSheetName(sheet)]; !ok {
+		err = fmt.Errorf("sheet %s is not exist", sheet)
 		return
 	}
 	if worksheet, ok := f.Sheet.Load(name); ok && worksheet != nil {
 		ws = worksheet.(*xlsxWorksheet)
 		return
 	}
-	for _, sheetType := range []string{"xl/chartsheets", "xl/dialogsheet", "xl/macrosheet"} {
-		if strings.HasPrefix(name, sheetType) {
-			err = newNotWorksheetError(sheet)
-			return
-		}
+	if strings.HasPrefix(name, "xl/chartsheets") || strings.HasPrefix(name, "xl/macrosheet") {
+		err = fmt.Errorf("sheet %s is not a worksheet", sheet)
+		return
 	}
 	ws = new(xlsxWorksheet)
 	if _, ok := f.xmlAttr[name]; !ok {
@@ -254,6 +246,7 @@ func (f *File) workSheetReader(sheet string) (ws *xlsxWorksheet, err error) {
 	}
 	if err = f.xmlNewDecoder(bytes.NewReader(namespaceStrictToTransitional(f.readBytes(name)))).
 		Decode(ws); err != nil && err != io.EOF {
+		err = fmt.Errorf("xml decode error: %s", err)
 		return
 	}
 	err = nil
@@ -334,35 +327,13 @@ func checkSheetR0(ws *xlsxWorksheet, sheetData *xlsxSheetData, r0 *xlsxRow) {
 	ws.SheetData = *sheetData
 }
 
-// setRels provides a function to set relationships by given relationship ID,
-// XML path, relationship type, target and target mode.
-func (f *File) setRels(rID, relPath, relType, target, targetMode string) int {
-	rels, _ := f.relsReader(relPath)
-	if rels == nil || rID == "" {
-		return f.addRels(relPath, relType, target, targetMode)
-	}
-	rels.Lock()
-	defer rels.Unlock()
-	var ID int
-	for i, rel := range rels.Relationships {
-		if rel.ID == rID {
-			rels.Relationships[i].Type = relType
-			rels.Relationships[i].Target = target
-			rels.Relationships[i].TargetMode = targetMode
-			ID, _ = strconv.Atoi(strings.TrimPrefix(rID, "rId"))
-			break
-		}
-	}
-	return ID
-}
-
 // addRels provides a function to add relationships by given XML path,
 // relationship type, target and target mode.
 func (f *File) addRels(relPath, relType, target, targetMode string) int {
 	uniqPart := map[string]string{
 		SourceRelationshipSharedStrings: "/xl/sharedStrings.xml",
 	}
-	rels, _ := f.relsReader(relPath)
+	rels := f.relsReader(relPath)
 	if rels == nil {
 		rels = &xlsxRelationships{}
 	}
@@ -396,40 +367,38 @@ func (f *File) addRels(relPath, relType, target, targetMode string) int {
 }
 
 // UpdateLinkedValue fix linked values within a spreadsheet are not updating in
-// Office Excel application. This function will be remove value tag when met a
+// Office Excel 2007 and 2010. This function will be remove value tag when met a
 // cell have a linked value. Reference
 // https://social.technet.microsoft.com/Forums/office/en-US/e16bae1f-6a2c-4325-8013-e989a3479066/excel-2010-linked-cells-not-updating
 //
-// Notice: after opening generated workbook, Excel will update the linked value
-// and generate a new value and will prompt to save the file or not.
+// Notice: after open XLSX file Excel will be update linked value and generate
+// new value and will prompt save file or not.
 //
 // For example:
 //
-//	<row r="19" spans="2:2">
-//	    <c r="B19">
-//	        <f>SUM(Sheet2!D2,Sheet2!D11)</f>
-//	        <v>100</v>
-//	     </c>
-//	</row>
+//    <row r="19" spans="2:2">
+//        <c r="B19">
+//            <f>SUM(Sheet2!D2,Sheet2!D11)</f>
+//            <v>100</v>
+//         </c>
+//    </row>
 //
 // to
 //
-//	<row r="19" spans="2:2">
-//	    <c r="B19">
-//	        <f>SUM(Sheet2!D2,Sheet2!D11)</f>
-//	    </c>
-//	</row>
+//    <row r="19" spans="2:2">
+//        <c r="B19">
+//            <f>SUM(Sheet2!D2,Sheet2!D11)</f>
+//        </c>
+//    </row>
+//
 func (f *File) UpdateLinkedValue() error {
-	wb, err := f.workbookReader()
-	if err != nil {
-		return err
-	}
+	wb := f.workbookReader()
 	// recalculate formulas
 	wb.CalcPr = nil
 	for _, name := range f.GetSheetList() {
 		ws, err := f.workSheetReader(name)
 		if err != nil {
-			if err.Error() == newNotWorksheetError(name).Error() {
+			if err.Error() == fmt.Sprintf("sheet %s is not a worksheet", trimSheetName(name)) {
 				continue
 			}
 			return err
@@ -449,18 +418,16 @@ func (f *File) UpdateLinkedValue() error {
 // AddVBAProject provides the method to add vbaProject.bin file which contains
 // functions and/or macros. The file extension should be .xlsm. For example:
 //
-//	codeName := "Sheet1"
-//	if err := f.SetSheetProps("Sheet1", &excelize.SheetPropsOptions{
-//	    CodeName: &codeName,
-//	}); err != nil {
-//	    fmt.Println(err)
-//	}
-//	if err := f.AddVBAProject("vbaProject.bin"); err != nil {
-//	    fmt.Println(err)
-//	}
-//	if err := f.SaveAs("macros.xlsm"); err != nil {
-//	    fmt.Println(err)
-//	}
+//    if err := f.SetSheetPrOptions("Sheet1", excelize.CodeName("Sheet1")); err != nil {
+//        fmt.Println(err)
+//    }
+//    if err := f.AddVBAProject("vbaProject.bin"); err != nil {
+//        fmt.Println(err)
+//    }
+//    if err := f.SaveAs("macros.xlsm"); err != nil {
+//        fmt.Println(err)
+//    }
+//
 func (f *File) AddVBAProject(bin string) error {
 	var err error
 	// Check vbaProject.bin exists first.
@@ -470,15 +437,12 @@ func (f *File) AddVBAProject(bin string) error {
 	if path.Ext(bin) != ".bin" {
 		return ErrAddVBAProject
 	}
-	rels, err := f.relsReader(f.getWorkbookRelsPath())
-	if err != nil {
-		return err
-	}
-	rels.Lock()
-	defer rels.Unlock()
+	wb := f.relsReader(f.getWorkbookRelsPath())
+	wb.Lock()
+	defer wb.Unlock()
 	var rID int
 	var ok bool
-	for _, rel := range rels.Relationships {
+	for _, rel := range wb.Relationships {
 		if rel.Target == "vbaProject.bin" && rel.Type == SourceRelationshipVBAProject {
 			ok = true
 			continue
@@ -490,25 +454,22 @@ func (f *File) AddVBAProject(bin string) error {
 	}
 	rID++
 	if !ok {
-		rels.Relationships = append(rels.Relationships, xlsxRelationship{
+		wb.Relationships = append(wb.Relationships, xlsxRelationship{
 			ID:     "rId" + strconv.Itoa(rID),
 			Target: "vbaProject.bin",
 			Type:   SourceRelationshipVBAProject,
 		})
 	}
-	file, _ := os.ReadFile(filepath.Clean(bin))
+	file, _ := ioutil.ReadFile(filepath.Clean(bin))
 	f.Pkg.Store("xl/vbaProject.bin", file)
 	return err
 }
 
 // setContentTypePartProjectExtensions provides a function to set the content
 // type for relationship parts and the main document part.
-func (f *File) setContentTypePartProjectExtensions(contentType string) error {
+func (f *File) setContentTypePartProjectExtensions(contentType string) {
 	var ok bool
-	content, err := f.contentTypesReader()
-	if err != nil {
-		return err
-	}
+	content := f.contentTypesReader()
 	content.Lock()
 	defer content.Unlock()
 	for _, v := range content.Defaults {
@@ -527,5 +488,4 @@ func (f *File) setContentTypePartProjectExtensions(contentType string) error {
 			ContentType: ContentTypeVBA,
 		})
 	}
-	return err
 }
