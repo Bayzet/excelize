@@ -1,6 +1,6 @@
 <p align="center"><img width="650" src="./excelize.svg" alt="Excelize logo"></p>
 
-<p align="center">
+<p align="center"> 
     <a href="https://github.com/xuri/excelize/actions/workflows/go.yml"><img src="https://github.com/xuri/excelize/actions/workflows/go.yml/badge.svg" alt="Build Status"></a>
     <a href="https://codecov.io/gh/qax-os/excelize"><img src="https://codecov.io/gh/qax-os/excelize/branch/master/graph/badge.svg" alt="Code Coverage"></a>
     <a href="https://goreportcard.com/report/github.com/xuri/excelize"><img src="https://goreportcard.com/badge/github.com/xuri/excelize" alt="Go Report Card"></a>
